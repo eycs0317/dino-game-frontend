@@ -4,28 +4,28 @@ import { useEffect, useRef, useState, useCallback, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { io, Socket } from 'socket.io-client'
 
-const SHAKE_THRESHOLD = 15
-const SHAKE_COOLDOWN_MS = 600
+const SWIPE_THRESHOLD = 40   // px upward to count as swipe
+const JUMP_COOLDOWN_MS = 300
 
 function PhoneController() {
   const searchParams = useSearchParams()
   const sessionId = searchParams.get('session') ?? ''
 
   const socketRef = useRef<Socket | null>(null)
-  const lastShakeRef = useRef(0)
+  const lastJumpRef = useRef(0)
+  const touchStartYRef = useRef(0)
   const [connected, setConnected] = useState(false)
-  const [shook, setShook] = useState(false)
+  const [jumped, setJumped] = useState(false)
 
-  const emitShake = useCallback(() => {
+  const emitJump = useCallback(() => {
     const now = Date.now()
-    if (now - lastShakeRef.current < SHAKE_COOLDOWN_MS) return
-    lastShakeRef.current = now
+    if (now - lastJumpRef.current < JUMP_COOLDOWN_MS) return
+    lastJumpRef.current = now
 
     socketRef.current?.emit('shake', { sessionId })
 
-    // Flash feedback
-    setShook(true)
-    setTimeout(() => setShook(false), 300)
+    setJumped(true)
+    setTimeout(() => setJumped(false), 250)
   }, [sessionId])
 
   // Connect to socket server
@@ -48,125 +48,68 @@ function PhoneController() {
     }
   }, [sessionId])
 
-  // Shake detection via DeviceMotion
-  useEffect(() => {
-    let prevX = 0, prevY = 0, prevZ = 0
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    touchStartYRef.current = e.touches[0].clientY
+  }, [])
 
-    const handleMotion = (e: DeviceMotionEvent) => {
-      const acc = e.accelerationIncludingGravity
-      if (!acc) return
-
-      const dx = Math.abs((acc.x ?? 0) - prevX)
-      const dy = Math.abs((acc.y ?? 0) - prevY)
-      const dz = Math.abs((acc.z ?? 0) - prevZ)
-
-      prevX = acc.x ?? 0
-      prevY = acc.y ?? 0
-      prevZ = acc.z ?? 0
-
-      if (dx + dy + dz > SHAKE_THRESHOLD) {
-        emitShake()
-      }
+  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
+    const deltaY = touchStartYRef.current - e.changedTouches[0].clientY
+    // Trigger on swipe up OR a quick tap (small movement)
+    if (deltaY > SWIPE_THRESHOLD || Math.abs(deltaY) < 10) {
+      emitJump()
     }
-
-    // iOS 13+ requires permission
-    if (
-      typeof DeviceMotionEvent !== 'undefined' &&
-      typeof (DeviceMotionEvent as unknown as { requestPermission?: () => Promise<string> }).requestPermission === 'function'
-    ) {
-      // Permission will be requested via button tap (see UI below)
-      return
-    }
-
-    window.addEventListener('devicemotion', handleMotion)
-    return () => window.removeEventListener('devicemotion', handleMotion)
-  }, [emitShake])
-
-  const requestMotionPermission = async () => {
-    const DME = DeviceMotionEvent as unknown as { requestPermission?: () => Promise<string> }
-    if (typeof DME.requestPermission === 'function') {
-      const result = await DME.requestPermission()
-      if (result !== 'granted') return
-
-      let prevX = 0, prevY = 0, prevZ = 0
-      const handleMotion = (e: DeviceMotionEvent) => {
-        const acc = e.accelerationIncludingGravity
-        if (!acc) return
-        const dx = Math.abs((acc.x ?? 0) - prevX)
-        const dy = Math.abs((acc.y ?? 0) - prevY)
-        const dz = Math.abs((acc.z ?? 0) - prevZ)
-        prevX = acc.x ?? 0
-        prevY = acc.y ?? 0
-        prevZ = acc.z ?? 0
-        if (dx + dy + dz > SHAKE_THRESHOLD) emitShake()
-      }
-      window.addEventListener('devicemotion', handleMotion)
-    }
-  }
-
-  const needsPermission =
-    typeof DeviceMotionEvent !== 'undefined' &&
-    typeof (DeviceMotionEvent as unknown as { requestPermission?: () => Promise<string> }).requestPermission === 'function'
+  }, [emitJump])
 
   return (
-    <div style={{
-      minHeight: '100vh',
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      justifyContent: 'center',
-      background: shook ? '#d4edda' : '#f7f7f7',
-      transition: 'background 0.2s',
-      fontFamily: "'Press Start 2P', cursive",
-      gap: '1.5rem',
-      padding: '2rem',
-      textAlign: 'center',
-    }}>
+    <div
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
+      style={{
+        minHeight: '100vh',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: jumped ? '#d4edda' : '#f7f7f7',
+        transition: 'background 0.2s',
+        fontFamily: "'Press Start 2P', cursive",
+        gap: '2rem',
+        padding: '2rem',
+        textAlign: 'center',
+        userSelect: 'none',
+        WebkitUserSelect: 'none',
+        touchAction: 'none',
+      }}
+    >
       <p style={{ fontSize: 11, color: '#535353', margin: 0 }}>
         {connected ? '🟢 Connected' : '🔴 Connecting...'}
       </p>
 
       <div style={{
-        width: 120,
-        height: 120,
-        borderRadius: '50%',
-        background: shook ? '#4caf50' : '#535353',
-        transition: 'background 0.2s, transform 0.1s',
-        transform: shook ? 'scale(1.15)' : 'scale(1)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        fontSize: 40,
-        cursor: 'pointer',
-        userSelect: 'none',
-      }}
-        onClick={emitShake}
-        onTouchStart={(e) => { e.preventDefault(); emitShake() }}
-      >
+        fontSize: 80,
+        transform: jumped ? 'translateY(-20px)' : 'translateY(0)',
+        transition: 'transform 0.2s ease-out',
+      }}>
         🦕
       </div>
 
-      <p style={{ fontSize: 9, color: '#888', margin: 0 }}>
-        Shake phone or tap dino to jump
-      </p>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', alignItems: 'center' }}>
+        <p style={{ fontSize: 10, color: '#535353', margin: 0 }}>
+          Swipe up to jump
+        </p>
+        <p style={{ fontSize: 8, color: '#aaa', margin: 0 }}>
+          or tap anywhere
+        </p>
+      </div>
 
-      {needsPermission && (
-        <button
-          onClick={requestMotionPermission}
-          style={{
-            fontFamily: "'Press Start 2P', cursive",
-            fontSize: 9,
-            padding: '0.75rem 1rem',
-            background: '#535353',
-            color: '#fff',
-            border: 'none',
-            borderRadius: 6,
-            cursor: 'pointer',
-          }}
-        >
-          Enable Shake (iOS)
-        </button>
-      )}
+      <div style={{
+        position: 'absolute',
+        bottom: '2rem',
+        fontSize: 7,
+        color: '#ccc',
+      }}>
+        {sessionId.slice(0, 8)}...
+      </div>
     </div>
   )
 }
