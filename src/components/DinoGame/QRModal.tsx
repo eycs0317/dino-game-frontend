@@ -38,8 +38,8 @@ export function QRModal({ phoneUrl, phoneConnected }: QRModalProps) {
           <QRCodeSVG value={phoneUrl} size={200} />
         </div>
 
-        <p style={{ fontSize: 8, color: '#888', margin: 0, wordBreak: 'break-all' }}>
-          {phoneUrl}
+        <p style={{ fontSize: 9, color: '#888', margin: 0, wordBreak: 'break-all' }}>
+          Swipe up to jump!!
         </p>
 
         {phoneConnected ? (
